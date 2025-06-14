@@ -264,6 +264,6 @@ Qiu, X., Hu, J., Zhou, L., Wu, X., Du, J., Zhang, B., Guo, C., Zhou, A., Jensen,
 - statsmodels
 - scikit-learn
 
-## 许可证
+## license
 
-MIT License # Time_series_cleaner
+MIT License 
