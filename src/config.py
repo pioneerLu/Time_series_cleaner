@@ -85,10 +85,8 @@ class Config:
         for dir_path in directories:
             try:
                 os.makedirs(dir_path, exist_ok=True)
-                print(f"创建目录：{dir_path}")
             except Exception as e:
-                print(f"创建目录 {dir_path} 时发生错误：{str(e)}")
-                raise
+                raise OSError(f"无法创建目录 {dir_path}: {str(e)}")
             
     def cleanup(self):
         """

@@ -28,21 +28,15 @@ class DataProcessor:
         :param skip_feature_calculation: 是否跳过特征计算步骤
         :return: 输出npy文件路径
         """
-        # 1. 将npy转换为csv
         self._npy2csv(input_npy_path)
         
-        # 2. 生成特征报告（可选）
         if not skip_feature_calculation:
             processor = TimeSeriesProcessor(output_dir=self.config.characteristics_dir)
             processor.process_path(self.config.csv_dir)
         
-        # 3. 筛选数据
         good_data = self._filter_data()
-        
-        # 4. 保存筛选后的数据
         self._save_filtered_data(good_data)
         
-        # 5. 清理临时文件
         if not self.config.keep_temp_files:
             self.config.cleanup()
             
@@ -53,10 +47,7 @@ class DataProcessor:
         仅计算特征，不进行数据筛选
         :param input_npy_path: 输入npy文件路径
         """
-        # 1. 将npy转换为csv
         self._npy2csv(input_npy_path)
-        
-        # 2. 生成特征报告
         processor = TimeSeriesProcessor(output_dir=self.config.characteristics_dir)
         processor.process_path(self.config.csv_dir)
         
@@ -66,17 +57,12 @@ class DataProcessor:
         :param input_npy_path: 输入npy文件路径
         :return: 输出npy文件路径
         """
-        # 1. 将npy转换为csv（如果csv文件不存在）
         if not os.path.exists(self.config.csv_dir):
             self._npy2csv(input_npy_path)
         
-        # 2. 筛选数据
         good_data = self._filter_data()
-        
-        # 3. 保存筛选后的数据
         self._save_filtered_data(good_data)
         
-        # 4. 清理临时文件
         if not self.config.keep_temp_files:
             self.config.cleanup()
             
@@ -103,28 +89,30 @@ class DataProcessor:
         :return: 筛选后的数据ID列表
         """
         good_data = []
-        dir = self.config.characteristics_dir
+        characteristics_dir = self.config.characteristics_dir
 
-        names = []
-        for file in os.listdir(dir):
+        feature_files = []
+        for file in os.listdir(characteristics_dir):
             if file.startswith('DATA_characteristics'):
-                names.append(file)
+                feature_files.append(file)
                 
-        for name in names:
-            temp = name.split('/')[-1].split('.')[0].split('_')[-1]
-            df = pd.read_csv(os.path.join(dir, name))
+        for feature_file in feature_files:
+            data_id = feature_file.split('/')[-1].split('.')[0].split('_')[-1]
+            feature_df = pd.read_csv(os.path.join(characteristics_dir, feature_file))
             
-            path2 = os.path.join(self.config.csv_dir, f'{self.config.data_length}_{temp}.csv')
-            df2 = pd.read_csv(path2)
+            csv_path = os.path.join(self.config.csv_dir, f'{self.config.data_length}_{data_id}.csv')
+            if not os.path.exists(csv_path):
+                continue
+                
+            csv_df = pd.read_csv(csv_path)
             
-            if self._check_conditions(df) and not self._is_zero_or_constant(df2['data'].values):
-                good_data.append(temp)
-
-                data_clean = self._fix_anomalies(df2['data'].values)
+            if self._check_conditions(feature_df) and not self._is_zero_or_constant(csv_df['data'].values):
+                good_data.append(data_id)
+                cleaned_data = self._fix_anomalies(csv_df['data'].values)
                 plt.figure(figsize=(10, 4))
-                plt.title(f'Data ID: {temp}')
-                plt.plot(data_clean)
-                plt.savefig(os.path.join(self.config.visualization_dir, f'plot_{temp}.png'))
+                plt.title(f'Data ID: {data_id}')
+                plt.plot(cleaned_data)
+                plt.savefig(os.path.join(self.config.visualization_dir, f'plot_{data_id}.png'))
                 plt.close()
                 
         return good_data
@@ -178,30 +166,25 @@ class DataProcessor:
         """
         修复时间序列中的异常值
         :param series_data: 时间序列数据
-        :param threshold: 异常值阈值
-        :param window_size: 滑动窗口大小
+        :param threshold: 异常值阈值（标准差的倍数，默认：7）
+        :param window_size: 滑动窗口大小（默认：3）
         :return: 修复后的时间序列
         """
         if not isinstance(series_data, pd.Series):
             series_data = pd.Series(series_data)
         fixed_series = series_data.copy()
         
-        # 计算滑动均值和标准差
         rolling_mean = series_data.rolling(window=window_size, center=True).mean()
         rolling_std = series_data.rolling(window=window_size, center=True).std()
         
-        # 填充滑动窗口边缘的NaN值
         rolling_mean = rolling_mean.fillna(method='bfill').fillna(method='ffill')
         rolling_std = rolling_std.fillna(method='bfill').fillna(method='ffill')
         rolling_std = rolling_std.replace(0, series_data.std())
         
         threshold_anomalies = np.abs(series_data - rolling_mean) > threshold * rolling_std
-        
-        # 检测极端低值
         median_value = series_data.median()
         extreme_low_anomalies = series_data < median_value * 0.2
         
-        # 合并两种异常检测
         anomalies = threshold_anomalies | extreme_low_anomalies
         anomaly_indices = np.where(anomalies)[0]
         
@@ -209,7 +192,6 @@ class DataProcessor:
             return series_data.values
         
         for idx in anomaly_indices:
-            # 寻找前后最近的非异常点
             left_idx = idx - 1
             while left_idx >= 0 and anomalies[left_idx]:
                 left_idx -= 1
@@ -218,10 +200,12 @@ class DataProcessor:
             while right_idx < len(series_data) and anomalies[right_idx]:
                 right_idx += 1
             
-            # 线性插值
             if left_idx >= 0 and right_idx < len(series_data):
-                fixed_series[idx] = np.interp(idx, [left_idx, right_idx], 
-                                           [series_data[left_idx], series_data[right_idx]])
+                fixed_series[idx] = np.interp(
+                    idx, 
+                    [left_idx, right_idx], 
+                    [series_data[left_idx], series_data[right_idx]]
+                )
             elif left_idx >= 0:
                 fixed_series[idx] = series_data[left_idx]
             elif right_idx < len(series_data):
@@ -234,24 +218,28 @@ class DataProcessor:
         保存筛选后的数据
         :param good_data: 筛选后的数据ID列表
         """
-        output_npy = None
-        
-        for data_idx in good_data:
-            data_path = os.path.join(self.config.csv_dir, f'{self.config.data_length}_{data_idx}.csv')
-            df = pd.read_csv(data_path)
-            data_clean = self._fix_anomalies(df['data'].values)
-            data = data_clean.reshape(1, -1, 1)
-            
-            if output_npy is None:
-                output_npy = data
-            else:
-                output_npy = np.concatenate((output_npy, data), axis=1)
-                
-        if output_npy is None:
-            print(f"没有筛选到数据")
+        if not good_data:
+            print("警告：没有筛选到符合条件的数据")
             return
             
-        # 保存为npy文件
+        filtered_samples = []
+        
+        for data_id in good_data:
+            csv_path = os.path.join(self.config.csv_dir, f'{self.config.data_length}_{data_id}.csv')
+            if not os.path.exists(csv_path):
+                continue
+                
+            df = pd.read_csv(csv_path)
+            cleaned_data = self._fix_anomalies(df['data'].values)
+            # 重塑为 (1, sequence_length, 1) 格式
+            sample = cleaned_data.reshape(1, -1, 1)
+            filtered_samples.append(sample)
+        
+        if not filtered_samples:
+            print("警告：没有有效的数据可以保存")
+            return
+            
+        output_npy = np.concatenate(filtered_samples, axis=0)
         os.makedirs(os.path.dirname(self.config.npy_output_path), exist_ok=True)
         np.save(self.config.npy_output_path, output_npy)
         print(f"保存筛选后的数据到: {self.config.npy_output_path}")
