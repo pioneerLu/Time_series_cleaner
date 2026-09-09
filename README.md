@@ -1,209 +1,114 @@
 # Time Series Data Cleaner
 
-一个用于清理和筛选时间序列数据的工具，基于 R 的 `tsfeatures` 库进行特征提取，支持智能数据筛选和异常值修复。
+给预训练时序模型准备单变量序列：读入 `.npy`，丢掉不可用样本，按长度写出干净数据。
 
-## 功能特性
-
-- 时间序列特征提取（使用 R 的 tsfeatures 库）
-- 基于多维度指标的数据筛选（趋势、季节性、转换、漂移、JSD）
-- 异常值自动检测和修复
-- 零值和常数值序列过滤
-- 灵活的处理模式（完整处理/仅特征/仅筛选）
+默认模式只依赖 NumPy / pandas，不跑 R。可选的统计特征严筛需要 R（`tsfeatures` 等）。
 
 ## 安装
 
-### 前置要求
-
-- Python 3.8+
-- R 4.3.1+
-- Conda（推荐）
-
-### 安装步骤
+预训练清洗：
 
 ```bash
-# 1. 创建 conda 环境
-conda create -n data_cleaner python=3.10 r-base=4.3.1
-conda activate data_cleaner
-
-# 2. 设置 R 环境变量
-export R_HOME=$CONDA_PREFIX/lib/R
-export PATH=$PATH:$R_HOME/bin
-
-# 3. 安装 R 包
-conda install -c conda-forge r-tidyverse r-Rcatch22 r-forecast r-tsfeatures -y
-
-# 4. 安装 Python 依赖
 pip install -r requirements.txt
 ```
 
-## 快速开始
-
-### 命令行使用
+统计特征严筛额外需要 Conda + R：
 
 ```bash
-# 完整处理
-python run.py --input data.npy --mode full --dataset_name my_dataset
+conda create -n data_cleaner python=3.10 r-base=4.3.1
+conda activate data_cleaner
+export R_HOME=$CONDA_PREFIX/lib/R
+export PATH=$PATH:$R_HOME/bin
+conda install -c conda-forge r-tidyverse r-Rcatch22 r-forecast r-tsfeatures -y
+pip install -r requirements-r.txt
+```
 
-# 仅计算特征
+## 输入 / 输出
+
+- 输入：单个 `.npy`，或含多个 `.npy` 的目录（默认递归子目录）
+- 形状规则：
+  - `(N, T, 1)` / `(N, T, C)`：按样本拆条；`C>1` 时 `--channel_mode flatten`（默认）拆通道，`first` 只留第 0 通道
+  - `(T,)`、`(T, 1)`、`(1, T)`：单条序列
+  - 其它二维：必须指定 `--layout NT`（每行一条）或 `--layout TC`（每列一个通道），否则报错退出
+  - `object` 数组：每个元素当作一条序列
+- 输出（默认 `output/`）：
+  - `data_{T}.npy`，形状 `(N, T, 1)`，`float32`
+  - `manifest.json`：保留 / 丢弃统计
+  - `index.jsonl`：溯源（来源文件、下标、输出位置）
+  - `progress.json`：增量进度
+
+## 预训练清洗（默认）
+
+```bash
+python run.py --input path/to/npy_or_dir
+python run.py --input path/to/npy_or_dir --output /tmp/clean --min_length 64 --overwrite
+python run.py --input wind.npy --layout TC
+python run.py --input data/ --nan_policy split --no-dedup
+python run.py --input data/ --no-recursive --disable_zero_check
+```
+
+默认会丢弃：
+
+- 长度小于 `--min_length`（默认 32）
+- 含 NaN / Inf（`--nan_policy interp` 插值，`split` 切成有限子段）
+- 全零、近常数（峰峰值过小）、开头近零过多（`--disable_zero_check` 关闭）
+- 与已保留样本取值完全相同的重复序列（`--no-dedup` 关闭）
+
+默认不使用 R、不画图、不修补异常值。需要修补时加 `--fix_anomalies`。
+
+中断后可对同一输出目录再次运行：已完成且未改动的文件会跳过。源文件变更会重建输出。`--overwrite` 强制重跑。
+
+### 常用参数
+
+| 参数 | 默认 | 说明 |
+|------|------|------|
+| `--layout` | `auto` | 二维含义：`NT` 每行一条，`TC` 每列一个通道 |
+| `--channel_mode` | `flatten` | 三维 `(N,T,C)`：拆通道或只留第 0 通道 |
+| `--nan_policy` | `drop` | `drop` / `interp` / `split` |
+| `--min_length` | `32` | 最短序列长度 |
+| `--recursive` | 开 | `--no-recursive` 只扫当前目录 |
+| `--dedup` | 开 | `--no-dedup` 不去重 |
+| `--overwrite` | 关 | 忽略进度，重新清洗 |
+| `--fix_anomalies` | 关 | 用滑动窗口修补尖峰 / 极端低值 |
+| `--keep_temp_files` | 关 | 保留分片临时文件 |
+
+零值检测相关：`--disable_zero_check`、`--zero_check_len`、`--zero_ratio_threshold`、`--zero_streak_threshold`、`--near_zero_threshold`、`--zero_std_threshold`（默认 `0`，不用标准差判常数，避免误杀零均值序列）。
+
+## 统计特征严筛（可选）
+
+需要 R，且一次处理一个 npy。会先把序列写成 CSV，用 `tsfeatures` / Catch22 提特征，再按趋势、季节性、转换、漂移、长期 JSD 筛选。
+
+```bash
+python run.py --input data.npy --mode full --dataset_name my_dataset --keep_temp_files
 python run.py --input data.npy --mode features --keep_temp_files --dataset_name my_dataset
-
-# 仅筛选数据（特征已计算）
 python run.py --input data.npy --mode filter --keep_temp_files --dataset_name my_dataset
 ```
 
-使用 `--help` 查看所有可用参数：
+`--mode full` 是完整流程（提特征 + 筛选）。`--mode features` 只提特征，`--mode filter` 假定特征已算好。加 `--visualize` 才会保存通过样本的图。
+
+筛选阈值（通常不用改）：
+
+| 参数 | 默认 | 含义 |
+|------|------|------|
+| `--trend_threshold` | 0.75 | 趋势强度下限 |
+| `--seasonality_threshold` | 0.64 | 季节性强度下限 |
+| `--transition_threshold` | 0.09 | 转换率上限 |
+| `--shifting_threshold` | 0.24 | 漂移率上限 |
+| `--long_term_jsd_threshold` | 0.3 | 长期分布偏移上限 |
+
+输出为 `output/{dataset_name}.npy`，形状 `(N, T, 1)`。
+
+## 脚本
+
 ```bash
-python run.py --help
+bash scripts/process_pretrain.sh
+bash scripts/process_full.sh
 ```
 
-### Python API
+可通过环境变量覆盖路径，例如 `INPUT=data OUTPUT=/tmp/clean MIN_LENGTH=64 bash scripts/process_pretrain.sh`。使用前把默认 `--input` 改成你的数据路径。
 
-```python
-from src.data_cleaner import DataProcessor, Config
+## 测试
 
-# 创建配置
-config = Config(
-    data_length=725,
-    dataset_name="my_dataset",
-    base_dir="/path/to/output",
-    keep_temp_files=False,
-    seasonality_threshold=0.64,
-    trend_threshold=0.75,
-    shifting_threshold=0.24,
-    transition_threshold=0.09,
-    long_term_jsd_threshold=0.3
-)
-
-# 处理数据
-processor = DataProcessor(config)
-output_path = processor.process_npy("input.npy")
+```bash
+python -m unittest tests.test_pretrain -v
 ```
-
-## 数据格式
-
-### 输入格式
-- **文件格式**: `.npy` 文件
-- **数据形状**: `(n_samples, sequence_length, 1)`
-  - `n_samples`: 样本数量
-  - `sequence_length`: 每个时间序列的长度
-  - `1`: 特征维度（单变量时间序列）
-- **数据类型**: `float32` 或 `float64`
-
-示例：
-```python
-import numpy as np
-
-# 生成示例数据
-n_samples = 100
-sequence_length = 725
-data = np.random.randn(n_samples, sequence_length, 1)
-np.save('data.npy', data)
-```
-
-### 输出格式
-- **文件格式**: `.npy` 文件
-- **数据形状**: `(n_filtered_samples, sequence_length, 1)`
-  - `n_filtered_samples`: 筛选后的样本数量
-  - `sequence_length`: 时间序列长度（与输入相同）
-  - `1`: 特征维度
-
-## 配置参数
-
-### 数据筛选参数（默认值）
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `seasonality_threshold` | 0.64 | 周期性强度阈值 |
-| `trend_threshold` | 0.75 | 趋势强度阈值 |
-| `shifting_threshold` | 0.24 | 漂移率阈值 |
-| `transition_threshold` | 0.09 | 转移率阈值 |
-| `long_term_jsd_threshold` | 0.3 | 长期JSD阈值 |
-
-### 零值检测参数（默认值）
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `enable_zero_check` | True | 是否启用零值检测 |
-| `zero_check_len` | 100 | 检查长度 |
-| `zero_ratio_threshold` | 0.9 | 零值比例阈值 |
-| `zero_streak_threshold` | 50 | 连续零值阈值 |
-| `near_zero_threshold` | 0.005 | 接近零的阈值 |
-| `zero_std_threshold` | 1.0 | 标准差阈值 |
-
-## 数据筛选标准
-
-数据必须满足以下所有条件才会被保留：
-
-1. 趋势强度 > `trend_threshold`（默认：0.75）
-2. 转换率 < `transition_threshold`（默认：0.09）
-3. 季节性强度 > `seasonality_threshold`（默认：0.64）
-4. 漂移率 < `shifting_threshold`（默认：0.24）
-5. 长期JSD < `long_term_jsd_threshold`（默认：0.3）
-6. 通过零值检测（如果启用）
-
-## 输出目录结构
-
-```
-{base_dir}/
-├── temp/                    # 临时文件目录
-│   ├── csv/                # CSV文件目录
-│   ├── characteristics/    # 特征报告目录
-│   └── visualization/      # 可视化结果目录
-└── output/                 # 最终输出目录
-    └── {dataset_name}.npy  # 筛选后的数据文件
-```
-
-## 命令行参数
-
-### 基本参数
-- `--input`: 输入npy文件路径（必需）
-- `--data_length`: 数据长度（可选，默认从输入文件自动获取）
-- `--dataset_name`: 数据集名称（默认：dataset）
-- `--base_dir`: 基础目录路径（可选）
-- `--keep_temp_files`: 是否保留临时文件
-
-### 处理模式
-- `--mode`: 处理模式（默认：full）
-  - `full`: 完整处理
-  - `features`: 仅计算特征
-  - `filter`: 仅筛选数据
-
-### 数据筛选参数
-所有筛选参数都有合理的默认值，通常无需修改。如需调整，请参考上方的配置参数表格。
-
-## 分步处理
-
-如果需要分步处理数据或重复使用已计算的特征：
-
-```python
-# 1. 仅计算特征
-processor.calculate_features(input_npy_path)
-
-# 2. 仅进行数据筛选（假设特征已计算完成）
-output_npy_path = processor.filter_data(input_npy_path)
-
-# 3. 完整处理但跳过特征计算
-output_npy_path = processor.process_npy(input_npy_path, skip_feature_calculation=True)
-```
-
-注意：使用分步处理时，请确保：
-- 设置 `keep_temp_files=True` 以保留临时文件
-- 使用相同的配置参数（特别是 `data_length` 和 `dataset_name`）
-
-## 异常值处理
-
-工具会自动检测并修复以下类型的异常值：
-1. **统计异常值**: 基于滑动窗口，超过阈值倍标准差的值
-2. **极端低值**: 低于中位数20%的值
-
-修复方法：使用线性插值或前向/后向填充。
-
-## 致谢
-
-本项目基于以下论文的工作：
-
-> Qiu, X., Hu, J., Zhou, L., Wu, X., Du, J., Zhang, B., Guo, C., Zhou, A., Jensen, C. S., Sheng, Z., & Yang, B. (2024). TFB: Towards Comprehensive and Fair Benchmarking of Time Series Forecasting Methods. Proceedings of the VLDB Endowment, 17(9), 2363-2377.
-
-## 贡献
-
-欢迎贡献。

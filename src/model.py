@@ -810,15 +810,12 @@ def dropandrename_dataframe(result_df: pd.DataFrame) -> pd.DataFrame:
 
 
 if __name__ == "__main__":
-    processor = TimeSeriesProcessor(output_dir="characteristics/data_5112")
-    file_path = "/home/rwkv/RWKV-TS/Universal-RWKV-TS-main/data_analysis/dataset_demo/UTSD_725"  
-    for file in os.listdir(file_path):
-        if file.endswith(".csv"):
-            try:
-                processor._process_single_file(os.path.join(file_path, file))
-            except Exception as e:
-                print(f"Error processing file {file}: {e}")
-                continue
-    # file_path = r"./DemoDatasets" # supports input a folder
-    # processor.process_path(file_path)
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Extract TFB features from CSV files")
+    parser.add_argument("--input", required=True, help="CSV 文件或目录")
+    parser.add_argument("--output", default="temp/characteristics", help="特征输出目录")
+    args = parser.parse_args()
+    processor = TimeSeriesProcessor(output_dir=args.output)
+    processor.process_path(args.input)
     print("Processing completed")
